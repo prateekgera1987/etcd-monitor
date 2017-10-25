@@ -167,17 +167,17 @@ func checkEtcdHealth() {
 
 	var count float64
 	if status.IsHealthy {
-		count = 1.0
+		count = 0.0
 		log.Printf("etcd is healthy")
 	} else {
-		count = 0.0
+		count = 1.0
 		log.Printf("etcd IS NOT healthy")
 	}
 
 	params := &cloudwatch.PutMetricDataInput{
 		MetricData: []*cloudwatch.MetricDatum{
 			{
-				MetricName: aws.String("HealthyCount"),
+				MetricName: aws.String("UnhealthyCount"),
 				Dimensions: []*cloudwatch.Dimension{
 					{
 						Name:  aws.String("By cluster"),

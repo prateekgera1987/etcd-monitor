@@ -3,7 +3,7 @@
 This small tool can be used to monitor the health status pf etcd instance. It can periodically check the the `/health`
 endpoint and push results to [AWS CloudWatch](https://aws.amazon.com/cloudwatch/) metrics.
 
-We use this tool to monitor the number of healthy etcd instances within etcd cluster.
+We use this tool to monitor the number of unhealthy etcd instances within etcd cluster.
 
 ## Usage
 
