@@ -16,12 +16,16 @@ tools:
 clean:
 	-rm $(PLATFORM_BINARIES)
 
+dist/cacert.pem:
+	[ -d dist ] || mkdir dist
+	curl -s -o $@ https://curl.haxx.se/ca/cacert.pem
+
 dist/etcd-monitor-linux-amd64: $(SOURCES)
 	[ -d dist ] || mkdir dist
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -installsuffix cgo -ldflags '-s' \
 	  -o $@ ./etcd-monitor.go
 
-container: dist/etcd-monitor-linux-amd64
+container: dist/cacert.pem dist/etcd-monitor-linux-amd64
 	docker build -t $(IMAGE_NAME) .
 
 check:
