@@ -148,58 +148,69 @@ func doEvery(d time.Duration, f func()) {
 }
 
 func checkEtcdHealth() {
-	resp, err := client.Get(fmt.Sprintf("%s/health", *address))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer resp.Body.Close()
+    resp, err := client.Get(fmt.Sprintf("%s/health", *address))
+    if err != nil {
+        log.Printf("Failed to connect to etcd: %s", err)
+        reportUnhealtyCount(1.0)
+        return
+    }
+    defer resp.Body.Close()
 
-	buff, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
+    buff, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        log.Printf("Failed to get etcd health: %s", err)
+        reportUnhealtyCount(1.0)
+        return
+    }
 
-	var status Health
-	err = json.Unmarshal(buff, &status)
-	if err != nil {
-		log.Fatal(err)
-	}
+    var status Health
+    err = json.Unmarshal(buff, &status)
+    if err != nil {
+        log.Printf("Invalid health response payload: %s", err)
+        reportUnhealtyCount(1.0)
+        return
+    }
 
-	var count float64
-	if status.IsHealthy {
-		count = 0.0
-		log.Printf("etcd is healthy")
-	} else {
-		count = 1.0
-		log.Printf("etcd IS NOT healthy")
-	}
+    if status.IsHealthy {
+        reportUnhealtyCount(0.0)
+    } else {
+        reportUnhealtyCount(1.0)
+    }
+}
 
-	params := &cloudwatch.PutMetricDataInput{
-		MetricData: []*cloudwatch.MetricDatum{
-			{
-				MetricName: aws.String("UnhealthyCount"),
-				Dimensions: []*cloudwatch.Dimension{
-					{
-						Name:  aws.String("By cluster"),
-						Value: aws.String(*etcdName),
-					},
-				},
-				StatisticValues: &cloudwatch.StatisticSet{
-					Maximum:     aws.Float64(count),
-					Minimum:     aws.Float64(count),
-					SampleCount: aws.Float64(1.0),
-					Sum:         aws.Float64(count),
-				},
-				Timestamp: aws.Time(time.Now()),
-				Unit:      aws.String("Count"),
-			},
-		},
-		Namespace: aws.String(*namespace),
-	}
+func reportUnhealtyCount(count float64) {
+    if count > 0 {
+        log.Printf("etcd IS NOT healthy")
+    } else {
+        log.Printf("etcd is healthy")
+    }
 
-	_, err = cw.PutMetricData(params)
-	if err != nil {
-		log.Println(err.Error())
-		return
-	}
+    params := &cloudwatch.PutMetricDataInput{
+        MetricData: []*cloudwatch.MetricDatum{
+            {
+                MetricName: aws.String("UnhealthyCount"),
+                Dimensions: []*cloudwatch.Dimension{
+                    {
+                        Name:  aws.String("By cluster"),
+                        Value: aws.String(*etcdName),
+                    },
+                },
+                StatisticValues: &cloudwatch.StatisticSet{
+                    Maximum:     aws.Float64(count),
+                    Minimum:     aws.Float64(count),
+                    SampleCount: aws.Float64(1.0),
+                    Sum:         aws.Float64(count),
+                },
+                Timestamp: aws.Time(time.Now()),
+                Unit:      aws.String("Count"),
+            },
+        },
+        Namespace: aws.String(*namespace),
+    }
+
+    _, err := cw.PutMetricData(params)
+    if err != nil {
+        log.Println(err.Error())
+        return
+    }
 }
