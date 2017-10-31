@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"time"
 
@@ -24,19 +25,22 @@ var etcdName *string
 var address *string
 var awsRegion *string
 var namespace *string
+var signalCh chan os.Signal
 
 type Health struct {
 	IsHealthy bool `json:"health,string"`
 }
 
 func main() {
+	signalCh = make(chan os.Signal, 1)
+
 	defaultInterval := 60
 	if i := os.Getenv("CHECK_INTERVAL"); i != "" {
-		defaultInterval, err := strconv.Atoi(i)
+		defaultIntervalEnv, err := strconv.Atoi(i)
 		if err != nil {
 			log.Fatal(err)
 		}
-		defaultInterval = defaultInterval
+		defaultInterval = defaultIntervalEnv
 	}
 	interval := flag.Int("interval", defaultInterval,
 		"Time interval of how often to run the check (in seconds). "+
@@ -138,79 +142,89 @@ func main() {
 
 	checkEtcdHealth()
 
-	doEvery(time.Duration(*interval)*time.Second, checkEtcdHealth)
-}
+	ticker := time.NewTicker(time.Duration(*interval) * time.Second)
 
-func doEvery(d time.Duration, f func()) {
-	for _ = range time.Tick(d) {
-		f()
+	signal.Notify(signalCh)
+
+	for {
+		select {
+		case <-ticker.C:
+			checkEtcdHealth()
+
+		case s := <-signalCh:
+			log.Printf("[DEBUG] receiving signal: %q", s)
+			ticker.Stop()
+			os.Exit(0)
+			return
+		}
 	}
+
 }
 
 func checkEtcdHealth() {
-    resp, err := client.Get(fmt.Sprintf("%s/health", *address))
-    if err != nil {
-        log.Printf("Failed to connect to etcd: %s", err)
-        reportUnhealtyCount(1.0)
-        return
-    }
-    defer resp.Body.Close()
+	resp, err := client.Get(fmt.Sprintf("%s/health", *address))
+	if err != nil {
+		log.Printf("[ERROR] Failed to connect to etcd: %s", err)
+		reportUnhealtyCount(1.0)
+		return
+	}
+	defer resp.Body.Close()
 
-    buff, err := ioutil.ReadAll(resp.Body)
-    if err != nil {
-        log.Printf("Failed to get etcd health: %s", err)
-        reportUnhealtyCount(1.0)
-        return
-    }
+	buff, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get etcd health: %s", err)
+		reportUnhealtyCount(1.0)
+		return
+	}
 
-    var status Health
-    err = json.Unmarshal(buff, &status)
-    if err != nil {
-        log.Printf("Invalid health response payload: %s", err)
-        reportUnhealtyCount(1.0)
-        return
-    }
+	var status Health
+	err = json.Unmarshal(buff, &status)
+	if err != nil {
+		log.Printf("[ERROR] Invalid health response payload: %s", err)
+		reportUnhealtyCount(1.0)
+		return
+	}
 
-    if status.IsHealthy {
-        reportUnhealtyCount(0.0)
-    } else {
-        reportUnhealtyCount(1.0)
-    }
+	if status.IsHealthy {
+		reportUnhealtyCount(0.0)
+	} else {
+		reportUnhealtyCount(1.0)
+	}
 }
 
 func reportUnhealtyCount(count float64) {
-    if count > 0 {
-        log.Printf("etcd IS NOT healthy")
-    } else {
-        log.Printf("etcd is healthy")
-    }
+	if count > 0 {
+		log.Printf("[INFO] etcd IS NOT healthy")
+	} else {
+		log.Printf("[INFO] etcd is healthy")
+	}
 
-    params := &cloudwatch.PutMetricDataInput{
-        MetricData: []*cloudwatch.MetricDatum{
-            {
-                MetricName: aws.String("UnhealthyCount"),
-                Dimensions: []*cloudwatch.Dimension{
-                    {
-                        Name:  aws.String("By cluster"),
-                        Value: aws.String(*etcdName),
-                    },
-                },
-                StatisticValues: &cloudwatch.StatisticSet{
-                    Maximum:     aws.Float64(count),
-                    Minimum:     aws.Float64(count),
-                    SampleCount: aws.Float64(1.0),
-                    Sum:         aws.Float64(count),
-                },
-                Timestamp: aws.Time(time.Now()),
-                Unit:      aws.String("Count"),
-            },
-        },
-        Namespace: aws.String(*namespace),
-    }
+	params := &cloudwatch.PutMetricDataInput{
+		MetricData: []*cloudwatch.MetricDatum{
+			{
+				MetricName: aws.String("UnhealthyCount"),
+				Dimensions: []*cloudwatch.Dimension{
+					{
+						Name:  aws.String("By cluster"),
+						Value: aws.String(*etcdName),
+					},
+				},
+				StatisticValues: &cloudwatch.StatisticSet{
+					Maximum:     aws.Float64(count),
+					Minimum:     aws.Float64(count),
+					SampleCount: aws.Float64(1.0),
+					Sum:         aws.Float64(count),
+				},
+				Timestamp: aws.Time(time.Now()),
+				Unit:      aws.String("Count"),
+			},
+		},
+		Namespace: aws.String(*namespace),
+	}
 
-    _, err := cw.PutMetricData(params)
-    if err != nil {
-        log.Println(err.Error())
-        return
-    }
+	_, err := cw.PutMetricData(params)
+	if err != nil {
+		log.Println(err.Error())
+		return
+	}
 }
